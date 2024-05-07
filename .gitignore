@@ -1,0 +1,6 @@
+headers.txt
+venv
+.idea
+~*
+*.xlsx
+*.csv
