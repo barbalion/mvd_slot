@@ -4,9 +4,9 @@ import json
 import requests
 
 service_id = 10001970310  # Получение паспорта нового поколения
-service_id2 = 10000101388  # Unknown
+queue_id = 10000101388  # Unknown
 search_region = 45000000000  # OKATO: https://classifikators.ru/okato/45000000000
-org_url = 'https://www.gosuslugi.ru/api/nsi/v1/dictionary/MVD_equeue_10000101388'
+org_url = f'https://www.gosuslugi.ru/api/nsi/v1/dictionary/MVD_equeue_{queue_id}'
 slots_url = 'https://www.gosuslugi.ru/api/lk/v1/equeue/agg/slots'
 headers_file = "headers.txt"
 
@@ -42,9 +42,7 @@ def org_req(region):
 
 
 def read_orgs(url=org_url):
-    headers = read_headers_from_file(headers_file)
-    req_data = org_req(search_region)
-    response = requests.post(url, json=req_data, headers=headers)
+    response = requests.post(url, json=(org_req(search_region)), headers=(read_headers_from_file(headers_file)))
     response.raise_for_status()  # Ensure to raise an exception for HTTP error codes
     data = response.json()
     for o in data['items']:
@@ -61,17 +59,8 @@ class Org:
         self.okato = okato
         self.slots = list(sorted(self.find_slots()))
 
-    def as_dict(self):
-        return {
-            'address': self.address,
-            'code': self.code,
-            'slotpercent': self.slotpercent,
-            'okato': self.okato,
-            'slots': self.slots,
-        }
-
     def find_slots(self):
-        req = {"organizationId": [self.code], "serviceId": [str(service_id)], "eserviceId": str(service_id2),
+        req = {"organizationId": [self.code], "serviceId": [str(service_id)], "eserviceId": str(queue_id),
                "attributes": [], "filter": None}
         response = requests.post(slots_url, json=req, headers=read_headers_from_file(headers_file))
         response.raise_for_status()
