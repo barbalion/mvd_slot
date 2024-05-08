@@ -1,5 +1,6 @@
 import csv
-import json
+import multiprocessing
+import signal
 
 import requests
 
@@ -10,20 +11,17 @@ org_url = f'https://www.gosuslugi.ru/api/nsi/v1/dictionary/MVD_equeue_{queue_id}
 slots_url = 'https://www.gosuslugi.ru/api/lk/v1/equeue/agg/slots'
 headers_file = "headers.txt"
 
+num_threads = 30
+num_slots_to_print = 30
 
-def read_headers_from_file(filename):
+
+def read_headers(filename):
     headers = {}
     with open(filename, 'r') as file:
         for line in file:
             name, value = line.strip().split(':', 1)
             headers[name.strip()] = value.strip()
     return headers
-
-
-def read_json_from_file(filename):
-    with open(filename, 'r') as file:
-        data = json.load(file)
-    return data
 
 
 def org_req(region):
@@ -42,13 +40,28 @@ def org_req(region):
 
 
 def read_orgs(url=org_url):
-    response = requests.post(url, json=(org_req(search_region)), headers=(read_headers_from_file(headers_file)))
+    print(f'Reading orgs...')
+    response = requests.post(url, json=(org_req(search_region)), headers=(read_headers(headers_file)))
     response.raise_for_status()  # Ensure to raise an exception for HTTP error codes
-    data = response.json()
-    for o in data['items']:
+    items = response.json()['items']
+    print('Found', len(items), 'orgs.')
+    for o in items:
         v = o['attributeValues']
         yield Org(v['address'], v['code'], v['SLOTPERCENT'], v['okato'])
-    return data
+
+
+def find_slots(org):
+    try:
+        print(f'Reading slots for {org}...')
+        req = {"organizationId": [str(org)], "serviceId": [str(service_id)], "eserviceId": str(queue_id),
+               "attributes": [], "filter": None}
+        response = requests.post(slots_url, json=req, headers=read_headers(headers_file))
+        response.raise_for_status()
+        slots_data = response.json()
+        return list(sorted([s['visitTime'] for s in slots_data['slots']]))
+    except Exception as e:
+        print(f'Error reading slots for {org}: {e}')
+        return [f'error']
 
 
 class Org:
@@ -57,28 +70,33 @@ class Org:
         self.code = code
         self.slotpercent = slotpercent
         self.okato = okato
-        self.slots = list(sorted(self.find_slots()))
+        self.slots = []
 
-    def find_slots(self):
-        req = {"organizationId": [self.code], "serviceId": [str(service_id)], "eserviceId": str(queue_id),
-               "attributes": [], "filter": None}
-        response = requests.post(slots_url, json=req, headers=read_headers_from_file(headers_file))
-        response.raise_for_status()
-        slots_data = response.json()
-        for s in slots_data['slots']:
-            yield s['visitTime']
+    def get_row(self):
+        return [self.code, self.address, self.slotpercent, len(self.slots), *self.slots[:num_slots_to_print]]
 
 
-def main():
+def write_output(orgs):
+    print(f'Writing output...')
     with open('orgs_data.csv', 'w', newline='', encoding='utf-8') as file:
         writer = csv.writer(file)
         writer.writerow(
-            ['Code', 'Address', 'Slot Percentage', 'Slots count', 'Slot1', 'Slot2', 'Slot3', 'Slot4', 'Slot5'])
-        for org in read_orgs():
-            # Limit the slots to display only the first 5 for brevity
-            row = [org.code, org.address, org.slotpercent, len(org.slots), *org.slots[0:5]]
-            print(row)
-            writer.writerow(row)
+            ['Code', 'Address', 'Slot Percentage', 'Slots count', *[f'Slot{n+1}' for n in range(num_slots_to_print)]])
+        for org in orgs:
+            writer.writerow(org.get_row())
+
+
+def main():
+    multiprocessing.freeze_support()
+    original_sigint_handler = signal.signal(signal.SIGINT, signal.SIG_IGN)
+    pool = multiprocessing.Pool(processes=num_threads)
+    signal.signal(signal.SIGINT, original_sigint_handler)
+    orgs = list(read_orgs())
+    slots = list(pool.map(find_slots, [o.code for o in orgs]))
+    for o, s in zip(orgs, slots):
+        o.slots = s
+    write_output(orgs)
+    print(f'Done.')
 
 
 if __name__ == "__main__":
