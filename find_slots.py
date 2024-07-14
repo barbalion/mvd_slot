@@ -17,9 +17,9 @@ slots_url = 'https://www.gosuslugi.ru/api/lk/v1/equeue/agg/slots'
 headers_file = "headers.txt"
 
 num_threads = 5
-throttle_delay_sec = 1
-num_slots_to_print = 50
-block_sleep_time_sec = 10
+request_min_interval_sec = 0.5
+num_slots_to_print = 30
+block_sleep_time_sec = 5
 
 
 def read_headers(filename):
@@ -82,8 +82,6 @@ def find_slots(org, start_time=None):
             slots_data = response.json()
             slots = list(sorted([s['visitTime'] for s in slots_data['slots']]))
             print(f'Found {len(slots)} slots for {org}...')
-            if sleep_time < 0:
-                time.sleep(throttle_delay_sec)
             return slots
         except JSONDecodeError as e:
             print(f'We looks to be blocked "{e}"! Refresh headers! Sleeping {block_sleep_time_sec} seconds...')
@@ -104,8 +102,11 @@ class Org:
     def get_row(self):
         return [self.code, self.address, self.slotpercent, len(self.slots), *self.slots[:num_slots_to_print]]
 
+    def get_slot_rows(self):
+        yield from [[self.code, self.address, sl] for sl in self.slots]
 
-def write_output(orgs):
+
+def write_orgs_output(orgs):
     print(f'Writing output...')
     with open('orgs_data.csv', 'w', newline='', encoding='utf-8') as file:
         writer = csv.writer(file)
@@ -115,6 +116,15 @@ def write_output(orgs):
             writer.writerow(org.get_row())
 
 
+def write_slot_output(orgs):
+    print(f'Writing flat output...')
+    with open('orgs_data_flat.csv', 'w', newline='', encoding='utf-8') as file:
+        writer = csv.writer(file)
+        writer.writerow(['Code', 'Address', 'Slot'])
+        for org in orgs:
+            writer.writerows(org.get_slot_rows())
+            
+
 def main():
     multiprocessing.freeze_support()
     original_sigint_handler = signal.signal(signal.SIGINT, signal.SIG_IGN)
@@ -122,11 +132,12 @@ def main():
     signal.signal(signal.SIGINT, original_sigint_handler)
     try:
         orgs = list(read_orgs())
-        job_params = list([(o.code, time.time() + i * throttle_delay_sec) for i, o in enumerate(orgs)])
+        job_params = list([(o.code, time.time() + i * request_min_interval_sec) for i, o in enumerate(orgs)])
         slots = list(pool.starmap(find_slots, job_params))
         for o, s in zip(orgs, slots):
             o.slots = s
-        write_output(orgs)
+        write_orgs_output(orgs)
+        write_slot_output(orgs)
         print(f'Done.')
     except (KeyboardInterrupt, SystemExit):
         pool.terminate()
